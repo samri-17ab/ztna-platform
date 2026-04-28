@@ -1,0 +1,147 @@
+version: '3.8'
+
+services:
+  # ----------------------------------------
+  # Core Database
+  # ----------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ztna_admin
+      POSTGRES_PASSWORD: securepassword123
+      POSTGRES_DB: ztna_core
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ztna_admin" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------------------
+  # Identity & Access Management (IdP)
+  # ----------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres/ztna_core
+      KC_DB_USERNAME: ztna_admin
+      KC_DB_PASSWORD: securepassword123
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ----------------------------------------
+  # Policy Decision Engine (OPA)
+  # ----------------------------------------
+  opa:
+    image: openpolicyagent/opa:latest-debug
+    ports:
+      - "8181:8181"
+    volumes:
+      - ./opa:/policy
+    command:
+      - "run"
+      - "--server"
+      - "--v0-compatible"
+      - "--log-level=debug"
+      - "/policy"
+
+  # ----------------------------------------
+  # Event Streaming (Continuous Monitoring)
+  # ----------------------------------------
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  # ----------------------------------------
+  # Network Enforcement Module
+  # ----------------------------------------
+  freeradius:
+    image: freeradius/freeradius-server:latest
+    ports:
+      - "1812:1812/udp"
+      - "1813:1813/udp"
+    environment:
+      RADIUS_CLIENTS: "0.0.0.0/0@testing123"
+    depends_on:
+      - postgres
+
+  # ----------------------------------------
+  # Go Backend API Gateway
+  # ----------------------------------------
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_HOST=postgres
+      - DB_USER=ztna_admin
+      - DB_PASS=securepassword123
+      - DB_NAME=ztna_core
+      - OPA_URL=http://opa:8181
+      - REDIS_URL=redis:6379
+      - KEYCLOAK_URL=http://keycloak:8080
+    depends_on:
+      - postgres
+      - opa
+      - redis
+    volumes:
+      - ./api:/app
+
+  # ----------------------------------------
+  # Frontend React Dashboard
+  # ----------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+
+  # ----------------------------------------
+  # Device Posture Assessment Agent (Mock)
+  # ----------------------------------------
+  agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    environment:
+      - API_ENDPOINT=http://api:8000/api/v1/devices/posture
+      - MAC_ADDRESS=00:1A:2B:3C:4D:5E
+    depends_on:
+      - api
+
+  # ----------------------------------------
+  # Continuous Monitoring Stream Processor
+  # ----------------------------------------
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    environment:
+      - REDIS_URL=redis:6379
+      - DB_HOST=postgres
+      - DB_USER=ztna_admin
+      - DB_PASS=securepassword123
+      - DB_NAME=ztna_core
+    depends_on:
+      - redis
+      - api
+      - postgres
+
+volumes:
+  pgdata:

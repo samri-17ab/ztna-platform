@@ -1,0 +1,6 @@
+{
+    "mac_address": "00:1A:2B:3C:4D:5E",
+    "username": "non-existent-user",
+    "switch_ip": "192.168.100.1",
+    "port": "GigabitEthernet1/0/1"
+}
